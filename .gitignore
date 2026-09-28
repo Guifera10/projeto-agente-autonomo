@@ -1,0 +1,11 @@
+﻿__pycache__/
+*.pyc
+*.pyo
+*.pdf
+*.xlsx
+*.xls
+resultados/
+*.log
+~$*
+*.tmp
+Thumbs.db

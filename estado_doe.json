@@ -1,0 +1,25 @@
+{
+  "processados": [
+    "54723|2026-09-11|176|ORDINARIA",
+    "54725|2026-09-14|177|ORDINARIA",
+    "54727|2026-09-15|178|ORDINARIA",
+    "54729|2026-09-16|179|ORDINARIA",
+    "54731|2026-09-17|180|ORDINARIA",
+    "54733|2026-09-18|181|ORDINARIA",
+    "54735|2026-09-21|182|ORDINARIA",
+    "54737|2026-09-22|183|ORDINARIA",
+    "54739|2026-09-23|184|ORDINARIA",
+    "54740|2026-09-24|185|ORDINARIA",
+    "54742|2026-09-25|186|ORDINARIA",
+    "54744|2026-09-28|187|ORDINARIA"
+  ],
+  "ultimo": {
+    "id": 54744,
+    "data": "2026-09-28",
+    "numero": 187,
+    "tipo": "ORDINARIA",
+    "pdf": "C:\\projetos Grok Build\\Acoes documentos\\AgenteDOE\\pdfs\\DOE_2026-09-28_ORDINARIA_54744.pdf",
+    "extrato": "C:\\projetos Grok Build\\Acoes documentos\\AgenteDOE\\FG_Cargos_Comissao.xlsx"
+  },
+  "atualizado_em": "2026-09-28T09:32:57"
+}
