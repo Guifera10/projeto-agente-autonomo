@@ -23,6 +23,129 @@ SHEET2 = "xl/worksheets/sheet2.xml"
 SHEET3 = "xl/worksheets/sheet3.xml"
 
 CELL_RE = re.compile(r'<c r="([A-Z]+)(\d+)"([^>/]*)(?:/>|>(.*?)</c>)', re.S)
+ROW_RE = re.compile(r'<row r="(\d+)"[^>]*/>|<row r="(\d+)"[^>]*>.*?</row>', re.S)
+# cellXfs com numFmtId=14 (data) na SPGG original; 148/145 são Geral.
+DATE_F_STYLES = {32, 46, 81, 137, 144, 337}
+
+
+def date_style_attrs(existing: str) -> str:
+    m = re.search(r's="(\d+)"', existing or "")
+    if m and int(m.group(1)) in DATE_F_STYLES:
+        return f' s="{m.group(1)}"'
+    return ' s="81"'
+
+
+def _num_vaga_xml(raw: str) -> int | None:
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    if re.fullmatch(r"-?\d+", raw):
+        n = int(raw)
+        return n if n >= 1000 else None
+    if re.fullmatch(r"-?\d+(?:\.\d+)?(?:E[+-]?\d+)?", raw, re.I):
+        try:
+            x = float(raw)
+            i = int(round(x))
+            if abs(x - i) < 0.51 and i >= 1000:
+                return i
+        except ValueError:
+            return None
+    return g.vaga_int(raw)
+
+
+def load_shared_strings(z: zipfile.ZipFile) -> list[str]:
+    if "xl/sharedStrings.xml" not in z.namelist():
+        return []
+    xml = z.read("xl/sharedStrings.xml").decode("utf-8")
+    out = []
+    for si in re.finditer(r"<si>(.*?)</si>", xml, re.S):
+        texts = re.findall(r"<t[^>]*>([^<]*)</t>", si.group(1))
+        out.append(html.unescape("".join(texts)))
+    return out
+
+
+def vaga_from_a_cell(attrs: str, inner: str | None, shared: list[str] | None = None) -> int | None:
+    if not inner:
+        return None
+    vm = re.search(r"<v>([^<]+)</v>", inner)
+    if 't="s"' in (attrs or "") and vm and shared:
+        try:
+            idx = int(vm.group(1))
+        except ValueError:
+            return None
+        if 0 <= idx < len(shared):
+            return _num_vaga_xml(shared[idx]) or g.vaga_int(shared[idx])
+        return None
+    if vm:
+        return _num_vaga_xml(vm.group(1))
+    tm = re.search(r"<t[^>]*>([^<]+)</t>", inner)
+    if tm:
+        return _num_vaga_xml(html.unescape(tm.group(1)))
+    return None
+
+
+def mapear_linhas_vaga(sheet_xml: str, shared: list[str] | None = None) -> dict[int, list[int]]:
+    found: dict[int, list[int]] = {}
+    for m in CELL_RE.finditer(sheet_xml):
+        col, row_s, attrs, inner = m.group(1), m.group(2), m.group(3), m.group(4)
+        if col != "A":
+            continue
+        vaga = vaga_from_a_cell(attrs, inner, shared)
+        row = int(row_s)
+        if vaga is None or vaga < 1000 or row < 2:
+            continue
+        found.setdefault(vaga, []).append(row)
+    return found
+
+
+def remover_linhas_xml(xml: str, rows_to_drop: set[int]) -> str:
+    if not rows_to_drop:
+        return xml
+
+    def repl(m: re.Match) -> str:
+        n = int(m.group(1) or m.group(2))
+        return "" if n in rows_to_drop else m.group(0)
+
+    return ROW_RE.sub(repl, xml)
+
+
+def pandas_ultimo_por_vaga(path: Path) -> dict[int, pd.Series]:
+    df = pd.read_excel(path, sheet_name="TUDO POR VAGA")
+    df["_k"] = df["VAGA_1"].map(g.vaga_int)
+    df["_dt"] = df["DATA DOE"].map(g.parse_date)
+    df["_ord"] = range(len(df))
+    df = df.sort_values(["_k", "_dt", "_ord"], na_position="first")
+    last = df.dropna(subset=["_k"]).drop_duplicates("_k", keep="last")
+    return {int(r["_k"]): r for _, r in last.iterrows()}
+
+
+def series_to_item(r: pd.Series) -> dict:
+    return {
+        "vaga": int(r["_k"]),
+        "nome": g.display_name(r.get("Nome")),
+        "saiu": g.display_name(r.get("NOME ANTERIOR")),
+        "id_rh": g.as_id(r.get("ID RH")),
+        "id_ant": g.as_id(r.get("ID_RH ANT.")),
+        "data": g.parse_date(r.get("DATA DOE")),
+        "status": r.get("STATUS"),
+        "cc_fg": r.get("CC/FG"),
+        "codigo": r.get("CÓDIGO"),
+        "fator": None if pd.isna(r.get("FATOR")) else r.get("FATOR"),
+        "encargo": r.get("ENCARGO"),
+        "orgao": r.get("Órgão"),
+        "unidade": r.get("UNIDADE ADM"),
+        "ato": None,
+        "tel": r.get("TELEFONE"),
+        "via": r.get("VIA PARTIDO") or "-",
+        "carg": r.get("CARG_INDIC") or "-",
+        "indic": r.get("INDICAÇÃO") or "-",
+        "partido": r.get("PARTIDO") or "-",
+        "via_ant": r.get("VIA PART. ANT.") or "-",
+        "carg_ant": r.get("CARG_INDIC ANT.") or "-",
+        "indic_ant": r.get("INDICAÇÃO ANTERIOR") or "-",
+        "partido_ant": r.get("PATIDO ANTERIOR") or "-",
+        "nova": False,
+    }
 
 
 def xml_text(value) -> str:
@@ -138,7 +261,7 @@ def overrides_for_item(item, row, attrs_map) -> dict:
     }
     serial = excel_serial(item["data"])
     if serial is not None:
-        out[("F", row)] = cell_num("F", row, serial, a("F"))
+        out[("F", row)] = cell_num("F", row, serial, date_style_attrs(a("F")))
     if item["status"]:
         out[("E", row)] = cell_inline("E", row, item["status"], a("E"))
     if item["cc_fg"]:
@@ -178,7 +301,7 @@ def build_new_row(item, row):
         cell_inline("C", row, "DIRETA", ' s="138"'),
         cell_inline("D", row, chefia, ' s="145"'),
         cell_inline("E", row, item["status"] or "OCUPADO", ' s="145"'),
-        cell_num("F", row, serial if serial != "" else None, ' s="148"'),
+        cell_num("F", row, serial if serial != "" else None, ' s="81"'),
         cell_num("G", row, item["id_rh"], ' s="145"'),
         cell_inline("H", row, nome, ' s="141"'),
         f'<c r="I{row}" s="145"/>',
@@ -539,6 +662,7 @@ def main():
         wbxml = zin.read("xl/workbook.xml").decode("utf-8")
         rels = zin.read("xl/_rels/workbook.xml.rels").decode("utf-8")
         ctypes = zin.read("[Content_Types].xml").decode("utf-8")
+        shared = load_shared_strings(zin)
 
     print("Mapeando células...")
     attrs_map = {}
@@ -547,10 +671,10 @@ def main():
         col, row_s, attrs, inner = m.group(1), m.group(2), m.group(3), m.group(4)
         row = int(row_s)
         attrs_map[(col, row)] = attrs
-        if col == "A" and inner:
-            vm = re.search(r"<v>(\d+)</v>", inner)
-            if vm:
-                row_of[int(vm.group(1))] = row
+        if col == "A":
+            vaga = vaga_from_a_cell(attrs, inner, shared)
+            if vaga is not None and vaga >= 1000 and row >= 2 and vaga not in row_of:
+                row_of[vaga] = row
     print("vagas mapeadas", len(row_of))
 
     overrides = {}
@@ -632,8 +756,12 @@ def patch_xlsx(base: Path, carga, skip_later: bool = True):
     current_dates = {}
     for _, r in spgg_now.iterrows():
         k = g.vaga_int(r.get("VAGA_1"))
-        if k is not None:
-            current_dates[k] = g.parse_date(r.get("DATA DOE"))
+        if k is None:
+            continue
+        d = g.parse_date(r.get("DATA DOE"))
+        prev = current_dates.get(k)
+        if k not in current_dates or (pd.notna(d) and (pd.isna(prev) or d > prev)):
+            current_dates[k] = d
 
     applied = []
     skipped_later = []
@@ -659,19 +787,27 @@ def patch_xlsx(base: Path, carga, skip_later: bool = True):
         wbxml = zin.read("xl/workbook.xml").decode("utf-8")
         rels = zin.read("xl/_rels/workbook.xml.rels").decode("utf-8")
         ctypes = zin.read("[Content_Types].xml").decode("utf-8")
+        shared = load_shared_strings(zin)
 
     attrs_map = {}
-    row_of = {}
     for m in CELL_RE.finditer(sheet2):
         col, row_s, attrs, inner = m.group(1), m.group(2), m.group(3), m.group(4)
-        row = int(row_s)
-        attrs_map[(col, row)] = attrs
-        if col == "A" and inner:
-            vm = re.search(r"<v>(\d+)</v>", inner)
-            if vm:
-                row_of[int(vm.group(1))] = row
+        attrs_map[(col, int(row_s))] = attrs
+
+    linhas = mapear_linhas_vaga(sheet2, shared)
+    row_of = {vaga: rows[0] for vaga, rows in linhas.items()}
+    extras = {row for rows in linhas.values() for row in rows[1:]}
+    latest = pandas_ultimo_por_vaga(base)
 
     overrides = {}
+    for vaga, rows in linhas.items():
+        if len(rows) < 2:
+            continue
+        rec = latest.get(vaga)
+        if rec is None:
+            continue
+        overrides.update(overrides_for_item(series_to_item(rec), rows[0], attrs_map))
+
     n_upd = 0
     novas = []
     for item in applied:
@@ -682,7 +818,29 @@ def patch_xlsx(base: Path, carga, skip_later: bool = True):
         else:
             novas.append(item)
 
+    for _, rec in spgg_now.iterrows():
+        k = g.vaga_int(rec.get("VAGA_1"))
+        if k is None:
+            continue
+        r = row_of.get(int(k))
+        if not r or ("F", r) in overrides:
+            continue
+        raw = rec.get("DATA DOE")
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            try:
+                if pd.isna(raw):
+                    continue
+            except (ValueError, TypeError):
+                pass
+            fv = float(raw)
+            if 20000 <= fv <= 80000:
+                fa = date_style_attrs(attrs_map.get(("F", r), ""))
+                overrides[("F", r)] = cell_num("F", r, int(round(fv)), fa)
+
     sheet2 = rewrite_sheet(sheet2, overrides)
+    if extras:
+        sheet2 = remover_linhas_xml(sheet2, extras)
+        print("Removidas", len(extras), "linhas duplicadas de VAGA_1")
     sheet3 = rewrite_sheet(sheet3, {})
 
     last = last_row_number(sheet2)
@@ -751,7 +909,36 @@ def _carga_from_checagem_row(r, nova: bool) -> dict:
         "encargo": r.get(enc_col) if enc_col and enc_col in r.index else None,
         "orgao": r.get(orgao_col) if orgao_col in r.index else r.get("Órgão"),
         "ato": r.get("Ato"),
+        "tel": None,
+        "via": "-",
+        "carg": "-",
+        "indic": "-",
+        "partido": "-",
+        "via_ant": "-",
+        "carg_ant": "-",
+        "indic_ant": "-",
+        "partido_ant": "-",
+        "fator": None,
+        "unidade": None,
     }
+
+
+def carga_from_checagem(path: Path | None = None) -> list[dict]:
+    path = path or OUT_CHECAGEM
+    novas = pd.read_excel(path, sheet_name="Vagas_novas")
+    movs = pd.read_excel(path, sheet_name="Movimentacoes")
+    merged: dict[int, dict] = {}
+    if novas is not None and not novas.empty:
+        for _, r in novas.iterrows():
+            k = g.vaga_int(r.get("VAGA_1"))
+            if k:
+                merged[int(k)] = _carga_from_checagem_row(r, True)
+    if movs is not None and not movs.empty:
+        for _, r in movs.iterrows():
+            k = g.vaga_int(r.get("VAGA_1"))
+            if k:
+                merged[int(k)] = _carga_from_checagem_row(r, False)
+    return list(merged.values())
 
 
 def incremental_lote(doe_path: Path):
@@ -766,6 +953,12 @@ def incremental_lote(doe_path: Path):
     print("atos no lote (último por vaga)", len(carga))
     prev_n, prev_m = snapshot_checagem_anterior()
     applied, skipped, n_upd, n_new = patch_xlsx(base, carga, skip_later=True)
+    if n_upd == 0 and n_new == 0 and OUT_CHECAGEM.exists():
+        print(
+            "Sem movimentações neste lote; conservada a última checagem com movimentações:",
+            OUT_CHECAGEM,
+        )
+        return
     merged = {}
     if prev_n is not None and not prev_n.empty:
         for _, r in prev_n.iterrows():

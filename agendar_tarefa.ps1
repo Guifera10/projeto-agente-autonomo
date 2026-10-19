@@ -35,7 +35,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
     -MultipleInstances IgnoreNew `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 2) `
+    -ExecutionTimeLimit (New-TimeSpan -Hours 16) `
     -RestartCount 3 `
     -RestartInterval (New-TimeSpan -Minutes 5)
 $principal = New-ScheduledTaskPrincipal `
@@ -50,7 +50,7 @@ Register-ScheduledTask `
     -Trigger @($triggerManha, $triggerNoite) `
     -Settings $settings `
     -Principal $principal `
-    -Description "Consulta o DOE, baixa PDF, extrai FG/cargos e atualiza a SPGG. Resultados em resultados\AAAA-MM-DD. Vale a partir de 11/09/2026. Roda todos os dias às 07:00 e às 19:00. Log em resultados\ultimo_ciclo.log." `
+    -Description "Se o DOE do dia ainda nao saiu, consulta a cada 10 min ate gravar resultados\AAAA-MM-DD. Com o resultado pronto, encerra. Extras na sessao das 19:00. Disparo 07:00 e 19:00. Limite 16h. Log em resultados\ultimo_ciclo.log." `
     -Force | Out-Null
 
 $info = Get-ScheduledTask -TaskName $taskName

@@ -1,6 +1,6 @@
 # Memória — Projeto Agente Autônomo
 
-Atualizado em 22/09/2026. Pasta canónica:
+Atualizado em 07/10/2026. Pasta canónica:
 
 `C:\projetos Grok Build\Acoes documentos\Projeto Agente Autonomo`
 
@@ -32,44 +32,46 @@ cd "C:\projetos Grok Build\Acoes documentos\Projeto Agente Autonomo"
 python orquestrador_doe.py --so-detectar
 python orquestrador_doe.py --so-baixar
 python orquestrador_doe.py
+python orquestrador_doe.py --vigia
 python orquestrador_doe.py --watch --intervalo 15
 python orquestrador_doe.py --sem-spgg
 python orquestrador_doe.py --a-partir-de 2026-09-11
 python orquestrador_doe.py --forcar
 ```
 
-`--forcar` ignora `estado_doe.json`, mas **não** ignora a regra da data posterior à última pasta em `resultados`.
+`--forcar` ignora `estado_doe.json` na varredura (último dia com SPGG até hoje). Extra do mesmo dia entra mesmo com a pasta do dia já gravada.
 
-Tarefa Windows: **DOE Agente Autonomo**, todos os dias às **07:00** e **19:00**, a partir de 11/09/2026. Se o PC estiver desligado, rodar `python orquestrador_doe.py` nesta pasta.
+Tarefa Windows: **DOE Agente Autonomo**, **07:00** e **19:00**. Se o DOE do dia ainda não saiu, vigia a cada 10 min até gravar `resultados/AAAA-MM-DD/`; com o resultado pronto, encerra. Extra entra na sessão das 19:00.
 
 ---
 
 ## Regras fechadas
 
-1. **Base da SPGG** = último `SPGG_PARA_ENVIAR_NUVEM.xlsx` gerado pelo orquestrador, na pasta `resultados/AAAA-MM-DD/` mais recente. Exemplo: depois de 11/09, a base do ciclo seguinte é `resultados/2026-09-11/SPGG_PARA_ENVIAR_NUVEM.xlsx`. Depois de 14/09, a base passa a ser `resultados/2026-09-14/…`.
-2. Só entra DOE com **data posterior** à dessa pasta. Com 14/09 gravado, o próximo lote é **15/09 em diante**.
-3. O resultado do ciclo vai para `resultados/AAAA-MM-DD/` (PDF, extrato FG, SPGG, checagem, estado, resumo).
+1. **Base da SPGG** = último `SPGG_PARA_ENVIAR_NUVEM.xlsx` em pasta de `resultados` **estritamente anterior** à data do DOE. Extra do mesmo dia reprocessa em cima do dia anterior, não em cima da ordinária da manhã.
+2. **Um resultado por dia.** Se a API ainda não tiver o DOE de hoje, a vigia consulta de 10 em 10 min até gravar a pasta; com o resultado pronto, encerra (volta aos horários 07:00 e 19:00). Extra nova na sessão das 19:00 reprocessa a pasta do dia. Sem DOE até 19:00: grava a pasta com a SPGG anterior.
+3. O resultado do ciclo vai para `resultados/AAAA-MM-DD/` (PDF, extrato FG deste ciclo, SPGG, checagem, estado, resumo).
 4. O orquestrador **não refiltra** atos. Quem decide o que entra no Excel FG é o `agente_fg_comissao.py`.
 5. Piso absoluto: não processar DOE anterior a **11/09/2026** (`DATA_INICIO_PADRAO`). Testes de 09/09 e 10/09 foram apagados.
 6. Aviso `openpyxl` “Data Validation extension is not supported” é inócuo.
+7. Se o lote incremental não aplicar nenhuma vaga (`atualizadas 0` e `novas 0`), a `CHECAGEM_atualizacao_SPGG.xlsx` **não é regravada**: permanece a última lista que teve movimentações.
 
 ---
 
 ## Pipeline
 
-1. Consulta a última edição ordinária na API.
-2. Se a data for posterior à última pasta em `resultados` (e ≥ 11/09) e o id não estiver em `estado_doe.json`:
-   - baixa `DOE_AAAA-MM-DD_ORDINARIA_<id>.pdf` para `AgenteDOE\pdfs\`
-   - corre `agente_fg_comissao.py --pdf …`
-   - copia o último `SPGG_PARA_ENVIAR_NUVEM.xlsx` de `resultados` para `Atualização DOE\`
-   - corre `gerar_spgg_nuvem_limpo.incremental_lote` sobre o extrato do dia
-   - copia PDF, FG, SPGG, checagem e estado para `resultados/AAAA-MM-DD/`
-3. Grava o id em `estado_doe.json` (nesta pasta).
+1. Varre **cada dia** desde a última pasta com SPGG em `resultados/` até hoje (inclui o último dia, para extra posterior).
+2. Em cada dia, consulta o DOE **tipo 1**. Se houver extra, baixa a **última atualização** (`/pdf?nroEdicao=N`).
+3. Confere tamanho e número de páginas com a API; PDF incompleto é rebaixado. Não reutiliza arquivo só porque tem mais de 50 KB.
+4. Extrai FG daquele PDF. Se 0 atos: grava a pasta do dia e **não** marca sucesso definitivo. Não reutiliza extrato de outro dia.
+5. Aplica SPGG em cima da pasta **anterior** (extra do mesmo dia não empilha na ordinária da manhã).
+6. Copia para `resultados/AAAA-MM-DD/` o PDF, o extrato **deste** ciclo, SPGG, checagem e estado. Rede: até 4 tentativas. Falha no meio da varredura interrompe o catch-up para não furar a cadeia.
 
-Pastas irmãs (não apagar):
+Tarefa Windows: **DOE Agente Autonomo**, 07:00 e 19:00, limite **16 h**. Vigia de 10 min só enquanto o dia não tiver pasta. Se o PC estiver desligado, rodar `python orquestrador_doe.py --vigia` nesta pasta.
 
-- `C:\projetos Grok Build\Acoes documentos\AgenteDOE`
-- `C:\projetos Grok Build\Acoes documentos\Atualização DOE`
+Pastas vivas (dentro deste projeto):
+
+- `AgenteDOE\`
+- `Atualização DOE\`
 
 ---
 
@@ -127,13 +129,26 @@ Pastas irmãs (não apagar):
 
 ---
 
-## Estado atual (22/09/2026)
+## 07/10/2026 — correções no orquestrador
 
-Último processado: `54737|2026-09-22|183|ORDINARIA`
+O ciclo das 07:00 processou a ordinária 194 (id 54758, 400 pág.). O código passou a:
 
-Última SPGG da cadeia: `resultados\2026-09-22\SPGG_PARA_ENVIAR_NUVEM.xlsx`
+- recuperar dias em falta (não só `consultar_ultima()`);
+- usar a última extra do dia via `nroEdicao`;
+- rebaixar PDF se as páginas não baterem com a API;
+- copiar só o FG gerado neste ciclo (não o mais recente da pasta AgenteDOE por mtime);
+- avisar com clareza se o Excel estiver com a SPGG aberta;
+- repetir a rede e parar o catch-up no primeiro erro do dia, para a cadeia da SPGG continuar contínua.
 
-Próximo ciclo: só DOE **≥ 23/09/2026**.
+`--extras` permanece no CLI por compatibilidade; o padrão já é a última atualização do dia.
+
+## Estado atual (07/10/2026)
+
+Último processado: `54758|2026-10-07|194|ORDINARIA`
+
+Última SPGG da cadeia: `resultados\2026-10-07\SPGG_PARA_ENVIAR_NUVEM.xlsx`
+
+Próximo ciclo: varre a partir de 07/10 (para extra do mesmo dia) até hoje.
 
 Conteúdo típico de `resultados/AAAA-MM-DD/`:
 

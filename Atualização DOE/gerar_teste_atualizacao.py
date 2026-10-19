@@ -120,6 +120,15 @@ def parse_date(value):
         return ts if pd.isna(ts) else ts.normalize()
     if isinstance(value, date) and not isinstance(value, datetime):
         return pd.Timestamp(value)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        fv = float(value)
+        if 20000 <= fv <= 80000:
+            return (pd.Timestamp("1899-12-30") + pd.Timedelta(days=int(round(fv)))).normalize()
+    text = str(value).strip()
+    if re.fullmatch(r"\d{5}", text):
+        fv = float(text)
+        if 20000 <= fv <= 80000:
+            return (pd.Timestamp("1899-12-30") + pd.Timedelta(days=int(fv))).normalize()
     return pd.to_datetime(value, dayfirst=True, errors="coerce")
 
 
